@@ -229,7 +229,7 @@ spec:
     spec:
       containers:
       - name: ums
-        image: "cheftestn/sample-test-app:v10"
+        image: "cheftestn/sample-test-app:v8"
         ports:
           #
          - name: http-api
