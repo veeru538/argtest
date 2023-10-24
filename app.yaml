@@ -94,7 +94,7 @@ spec:
         - name: ums
           securityContext:
             {}
-          image: "cheftestn/sample-test-app:v08"
+          image: "cheftestn/sample-test-app:v8"
           imagePullPolicy: Always
           ports:
           #
