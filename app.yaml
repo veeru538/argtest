@@ -1,0 +1,263 @@
+# Source: ums/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ums
+  labels:
+    helm.sh/chart: ums-0.1.0
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+---
+# Source: ums/templates/canary-service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ums-canary
+  labels:
+    helm.sh/chart: ums-0.1.0
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    #
+    - name: http-api
+      protocol: TCP
+      port: 443
+      targetPort: 4040
+    - name: http-soap
+      protocol: TCP
+      port: 5050
+      targetPort: 6050
+  selector:
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+---
+# Source: ums/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: ums
+  labels:
+    helm.sh/chart: ums-0.1.0
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  type: ClusterIP
+  ports:
+    #
+    - name: http-api
+      protocol: TCP
+      port: 443
+      targetPort: 4040
+    - name: http-soap
+      protocol: TCP
+      port: 5050
+      targetPort: 6050
+  selector:
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+---
+# Source: ums/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ums
+  labels:
+    helm.sh/chart: ums-0.1.0
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ums
+      app.kubernetes.io/instance: ums
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ums
+        app.kubernetes.io/instance: ums
+    spec:
+      serviceAccountName: ums
+      securityContext:
+        {}
+      containers:
+        - name: ums
+          securityContext:
+            {}
+          image: "cheftestn/sample-test-app:v18"
+          imagePullPolicy: Always
+          ports:
+          #
+            - containerPort: 4040
+              name: http-api
+              protocol: TCP
+            - containerPort: 6050
+              name: https-soap
+              protocol: TCP
+            - containerPort: 5058
+              name: https-health
+              protocol: TCP
+          readinessProbe:
+            failureThreshold: 3
+            httpGet:
+              path: /
+              port: 5008
+              scheme: HTTP
+            initialDelaySeconds: 300
+            periodSeconds: 10
+            successThreshold: 1
+            timeoutSeconds: 1
+          resources:
+            {}
+---
+# Source: ums/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ums
+  labels:
+    helm.sh/chart: ums-0.1.0
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  rules:
+    - host: dev.example.com
+      http:
+        paths:
+          - backend:
+              service:
+                name: ums
+                port:
+                  number: 443
+            path: /
+            pathType: Prefix
+    - host: dev.example.com
+      http:
+        paths:
+          - backend:
+              service:
+                name: ums
+                port:
+                  number: 5050
+            path: /
+            pathType: Prefix
+---
+# Source: ums/templates/analysis.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: ums-success-rate
+spec:
+  args:
+  - name: service-name
+  metrics:
+  - name: success-rate
+    interval: 1m
+    # NOTE: prometheus queries return results in the form of a vector.
+    # So it is common to access the index 0 of the returned array to obtain the value
+    successCondition: result[0] >= 0.95
+    failureLimit: 2
+    provider:
+      prometheus:
+        address: http://prometheus-server.ingress-nginx.svc.cluster.local:9090
+        query: |
+          sum(rate(nginx_ingress_controller_requests{service=~"ums",status!~"[3-4].*"}[3m])) /
+          sum(rate(nginx_ingress_controller_requests{service=~"ums"}[3m]))
+---
+# Source: ums/templates/rollout.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: ums
+spec:
+  replicas: 1
+  strategy:
+    canary:
+      analysis:
+        templates:
+        # name of AnalysisTemplate
+        - templateName: ums-success-rate
+        args:
+        - name: service-name
+          value: ums
+        # When it begins (after the 1-minute pause)
+      canaryService: ums-canary
+      stableService: ums
+      trafficRouting:
+        nginx:
+          stableIngress: ums
+      steps:
+      - setWeight: 20
+      - pause:
+          duration: "15"
+      - setWeight: 40
+      - pause:
+          duration: "15"
+      - setWeight: 60
+      - pause:
+          duration: "15"
+      - setWeight: 80
+      - pause:
+          duration: "15"
+      - setWeight: 100
+      - pause:
+          duration: "15"
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ums
+      app.kubernetes.io/instance: ums
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ums
+        app.kubernetes.io/instance: ums
+    spec:
+      containers:
+      - name: ums
+        image: "cheftestn/sample-test-app:v10"
+        ports:
+          #
+         - name: http-api
+           protocol: TCP
+           port: 443
+           targetPort: 4040
+         - name: http-soap
+           protocol: TCP
+           port: 5050
+           targetPort: 6050
+---
+# Source: ums/templates/tests/test-connection.yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "ums-test-connection"
+  labels:
+    helm.sh/chart: ums-0.1.0
+    app.kubernetes.io/name: ums
+    app.kubernetes.io/instance: ums
+    app.kubernetes.io/version: "1.16.0"
+    app.kubernetes.io/managed-by: Helm
+  annotations:
+    "helm.sh/hook": test
+spec:
+  containers:
+    - name: wget
+      image: busybox
+      command: ['curl -k ']
+      args: ['ums:4040/']
+  restartPolicy: Never
